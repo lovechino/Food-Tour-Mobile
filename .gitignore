@@ -1,0 +1,71 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Build artifacts
+build/
+android/app/build/
+android/build/
+ios/build/
+ios/DerivedData/
+ios/Pods/
+ios/vendor/bundle/
+ios/*.ipa
+ios/*.xcuserstate
+
+# Environment files
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Metro/Yarn/NPX/Jest files
+.metro-health-check*
+/coverage/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+*.jsbundle
+npm-debug.log
+yarn-error.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Fastlane
+**/fastlane/report.xml
+**/fastlane/Preview.html
+**/fastlane/screenshots
+**/fastlane/test_output
+
+# Local development files
+local.properties
+*.keystore
+!debug.keystore
+
+# macOS specific
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Android specific (IntelliJ)
+.gradle
+*.iml
+*.hprof
+.cxx/
+.kotlin/
