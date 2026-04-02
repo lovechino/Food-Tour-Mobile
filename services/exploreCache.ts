@@ -1,12 +1,13 @@
 /**
  * services/exploreCache.ts
- * Daily cache logic cho Explore screen.
+ * Cache cho Explore screen với TTL 3 giờ.
  *
  * Quy tắc:
- *  - Key: `@explore/{city}/{YYYY-MM-DD}`
- *  - Load đầu ngày: so sánh date string → cache miss → fetch mới
- *  - Pull-to-refresh: gọi refreshExploreData() → invalidate key → fetch mới
- *  - Random luôn fetch mới bất kể cache (không cache)
+ *  - Key: `@explore/{city}`
+ *  - TTL: 3 giờ (10800000ms) — cân bằng giữa freshness và performance
+ *  - Khi crowdsourcing hoạt động, user sẽ thấy quán mới approve trong vòng 3h
+ *  - Pull-to-refresh: gọi refreshExploreData() → invalidate → fetch mới
+ *  - Random luôn fetch mới bất kể cache
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -31,67 +32,70 @@ export interface ExploreData {
     priceRange: PriceDistResponse;
     trending: FoodItemRanked[];
     random: FoodItem[];      // Không cache – luôn fresh
-    aiSuggest?: AiSuggestResponse; // Ai Suggestion (optional for backwards compatibility)
-    fetchedAt: string;       // ISO date string để debug
+    aiSuggest?: AiSuggestResponse;
+    fetchedAt: string;       // ISO timestamp để check TTL
 }
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const CACHE_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const todayStr = () => new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+const cacheKey = (city: string) => `@explore/${city}`;
 
-const cacheKey = (city: string) => `@explore/${city}/${todayStr()}`;
+function isCacheValid(fetchedAt: string): boolean {
+    const age = Date.now() - new Date(fetchedAt).getTime();
+    return age < CACHE_TTL_MS;
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Lấy explore data: đọc cache nếu còn trong ngày, fetch mới nếu không.
+ * Lấy explore data: đọc cache nếu còn trong TTL (3h), fetch mới nếu không.
  * Random section luôn được fetch mới dù từ cache.
  */
 export async function getExploreData(city: string): Promise<ExploreData> {
     const key = cacheKey(city);
 
-    // Thử đọc cache
     try {
         const raw = await AsyncStorage.getItem(key);
         if (raw) {
             const cached: ExploreData = JSON.parse(raw);
 
-            // Handle corrupted cache (e.g. from previous backend iteration)
             if (!Array.isArray(cached.districts)) {
                 throw new Error("Corrupted cache: districts is not an array");
             }
 
-            // Fetch random lại dù có cache
-            const random = await fetchRandom(city, { limit: 5 }).catch(() => []);
-            return { ...cached, random };
+            if (isCacheValid(cached.fetchedAt)) {
+                // Cache còn valid → dùng + fetch random mới
+                const random = await fetchRandom(city, { limit: 5 }).catch(() => []);
+                return { ...cached, random };
+            }
+            // Cache hết hạn → fetch mới
         }
     } catch (_) {
-        // Cache corrupt → fetch mới
+        // Cache corrupt hoặc không tồn tại → fetch mới
     }
 
     return fetchAndCache(city);
 }
 
 /**
- * Fetch mới từ API, ghi vào cache hôm nay.
- * Gọi khi pull-to-refresh hoặc cache miss.
+ * Fetch mới từ API, ghi vào cache.
+ * Gọi khi pull-to-refresh hoặc cache miss/expired.
  */
 export async function refreshExploreData(city: string): Promise<ExploreData> {
-    // Xoá cache cũ của city này trước
     await invalidateCache(city);
     return fetchAndCache(city);
 }
 
 /**
- * Xoá tất cả cache của một city (key prefix matching).
+ * Xoá cache của một city.
  */
 export async function invalidateCache(city: string): Promise<void> {
     try {
-        const allKeys = await AsyncStorage.getAllKeys();
-        const cityKeys = allKeys.filter(k => k.startsWith(`@explore/${city}/`));
-        if (cityKeys.length > 0) {
-            await AsyncStorage.multiRemove(cityKeys);
-        }
+        await AsyncStorage.removeItem(cacheKey(city));
     } catch (_) { }
 }
 
@@ -105,7 +109,7 @@ async function fetchAndCache(city: string): Promise<ExploreData> {
             fetchPriceRange(city),
             fetchTrending(city, 10),
             fetchRandom(city, { limit: 5 }),
-            fetchAiSuggest(city, 'món ăn').catch(() => undefined), // Fail gracefully if AI is down
+            fetchAiSuggest(city, 'món ăn').catch(() => undefined),
         ]);
 
     const data: ExploreData = {
@@ -118,7 +122,7 @@ async function fetchAndCache(city: string): Promise<ExploreData> {
         fetchedAt: new Date().toISOString(),
     };
 
-    // Ghi cache (không cache phần random)
+    // Ghi cache (không cache random)
     const toCache: ExploreData = { ...data, random: [] };
     try {
         await AsyncStorage.setItem(cacheKey(city), JSON.stringify(toCache));
