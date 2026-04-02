@@ -29,71 +29,59 @@ export const getDownloadedPacks = async () => {
 };
 
 
-
 import { getCityConfig } from "./cityConfig";
+import { downloadWithResume } from "./downloadService";
 
 export const downloadCityPack = async (
   city: string,
-  onProgress?: (p: number) => void
-) => {
+  onProgress?: (p: number) => void,
+): Promise<boolean> => {
+  const config = getCityConfig(city);
+  if (!config) {
+    console.error(`City pack config not found for: ${city}`);
+    return false;
+  }
+
   try {
-    const config = getCityConfig(city);
-    if (!config) {
-      console.error(`City pack config not found for: ${city}`);
-      return false;
-    }
-
-    const url = config.url; // Lấy URL chính xác từ config
-
     const zipPath = `${RNFS.DocumentDirectoryPath}/${city}.zip`;
-    const targetFolder = `${RNFS.DocumentDirectoryPath}/citypacks/${city}`;
-    const baseFolder = `${RNFS.DocumentDirectoryPath}/citypacks`;
+    await ensureFolder(`${RNFS.DocumentDirectoryPath}/citypacks`);
 
-    if (!(await RNFS.exists(baseFolder))) {
-      await RNFS.mkdir(baseFolder);
-    }
+    const ok = await downloadWithResume(config.url, zipPath, onProgress);
+    if (!ok) throw new Error('Download failed');
 
-    console.log(`Downloading pack for ${config.name} (v${config.version})...`);
-    console.log("URL:", url);
-
-    const download = RNFS.downloadFile({
-      fromUrl: url,
-      toFile: zipPath,
-
-      // 👇 progress callback
-      progress: (res) => {
-        const progress = res.bytesWritten / res.contentLength;
-        onProgress?.(progress); // trả về 0 → 1
-      },
-      progressDivider: 1, // gọi liên tục
-    });
-
-    const res = await download.promise;
-
-    if (res.statusCode !== 200) throw new Error('Download failed with status: ' + res.statusCode);
-
-    console.log('Unzipping...');
-    await unzip(zipPath, targetFolder);
-
-    // Chuẩn bị DB (copy ra ngoài để SQLite kết nối)
-    await prepareDB(city);
-
-    // Lưu thông tin version vào thư mục pack để check update sau này
-    const versionInfo = {
-      version: config.version,
-      updatedAt: new Date().toISOString()
-    };
-    await RNFS.writeFile(`${targetFolder}/version.json`, JSON.stringify(versionInfo), 'utf8');
-
-    await RNFS.unlink(zipPath);
-
-    console.log(`City pack ${city} ready!`);
+    await extractAndPrepare(city, zipPath, config.version);
     return true;
   } catch (e) {
-    console.log('Download pack error:', e);
+    console.error('Download pack error:', e);
     return false;
   }
 };
+
+async function ensureFolder(path: string): Promise<void> {
+  if (!(await RNFS.exists(path))) await RNFS.mkdir(path);
+}
+
+async function extractAndPrepare(
+  city: string,
+  zipPath: string,
+  version: string,
+): Promise<void> {
+  const targetFolder = `${RNFS.DocumentDirectoryPath}/citypacks/${city}`;
+
+  console.log('Unzipping...');
+  await unzip(zipPath, targetFolder);
+  await prepareDB(city);
+
+  const versionInfo = {
+    version,
+    updatedAt: new Date().toISOString(),
+  };
+  const versionPath = `${targetFolder}/version.json`;
+  await RNFS.writeFile(versionPath, JSON.stringify(versionInfo), 'utf8');
+  await RNFS.unlink(zipPath);
+
+  console.log(`City pack ${city} ready!`);
+}
 
 
 

@@ -1,9 +1,9 @@
 /**
  * services/cityApi.ts
- * Fetch 6 city insight endpoints từ FastAPI backend.
+ * Fetch 6 city insight endpoints + AI endpoints via centralized apiClient.
+ * Now uses apiClient for 401 queue pattern — all auth failures handled consistently.
  */
-import { API_BASE_URL } from '../constants/api';
-import { getAuthHeader } from './authService';
+import { apiGet, apiPost } from './apiClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -16,6 +16,8 @@ export interface FoodItem {
     thanh_pho: string;
     gia_min: number;
     gia_max: number;
+    gia_trung_binh?: number;
+    tags?: string;
     note: string;
     lat?: number;
     lng?: number;
@@ -44,28 +46,17 @@ export interface PriceDistResponse {
 
 // ── API helpers ────────────────────────────────────────────────────────────────
 
-async function get<T>(path: string): Promise<T> {
-    const authHeader = await getAuthHeader();
-    const res = await fetch(`${API_BASE_URL}${path}`, {
-        headers: { ...authHeader }
-    });
-    if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
-    return res.json() as Promise<T>;
-}
-
-// ── Exports ────────────────────────────────────────────────────────────────────
-
 export const fetchTopClicks = (city: string, limit = 10) =>
-    get<FoodItemRanked[]>(`/city/${city}/top-clicks?limit=${limit}`);
+    apiGet<FoodItemRanked[]>(`/city/${city}/top-clicks?limit=${limit}`);
 
 export const fetchDistricts = (city: string) =>
-    get<DistrictStat[]>(`/city/${city}/districts`);
+    apiGet<DistrictStat[]>(`/city/${city}/districts`);
 
 export const fetchPriceRange = (city: string) =>
-    get<PriceDistResponse>(`/city/${city}/price-range`);
+    apiGet<PriceDistResponse>(`/city/${city}/price-range`);
 
 export const fetchTrending = (city: string, limit = 10) =>
-    get<FoodItemRanked[]>(`/city/${city}/trending?limit=${limit}`);
+    apiGet<FoodItemRanked[]>(`/city/${city}/trending?limit=${limit}`);
 
 export const fetchRandom = (
     city: string,
@@ -76,7 +67,7 @@ export const fetchRandom = (
     if (opts?.max_price) parts.push(`max_price=${opts.max_price}`);
     if (opts?.limit) parts.push(`limit=${opts.limit}`);
     const qs = parts.length ? `?${parts.join('&')}` : '';
-    return get<FoodItem[]>(`/city/${city}/random${qs}`);
+    return apiGet<FoodItem[]>(`/city/${city}/random${qs}`);
 };
 
 // ── AI Endpoints ──────────────────────────────────────────────────────────────
@@ -92,7 +83,7 @@ export interface AiSuggestResponse {
 
 export const fetchAiSuggest = (city: string, query?: string) => {
     const qs = query ? `&query=${encodeURIComponent(query)}` : '';
-    return get<AiSuggestResponse>(`/ai/suggest?city=${city}${qs}`);
+    return apiGet<AiSuggestResponse>(`/ai/suggest?city=${city}${qs}`);
 };
 
 export const fetchAiNearby = async (
@@ -104,33 +95,15 @@ export const fetchAiNearby = async (
     options?: { grounding?: boolean; radius?: number }
 ) => {
     console.log('[AiApi] fetchAiNearby Request:', { city, userAddress, lat, lng, query, options });
-    try {
-        const authHeader = await getAuthHeader();
-        const res = await fetch(`${API_BASE_URL}/ai/nearby`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                ...authHeader
-            },
-            body: JSON.stringify({
-                city,
-                user_address: userAddress,
-                query,
-                lat,
-                lng,
-                grounding: options?.grounding ?? false,
-                radius: options?.radius ?? 1000,
-            }),
-        });
-        if (!res.ok) {
-            console.error('[AiApi] fetchAiNearby Error Status:', res.status);
-            throw new Error(`API error ${res.status}: /ai/nearby`);
-        }
-        const data = (await res.json()) as AiSuggestResponse;
-        console.log('[AiApi] fetchAiNearby Success:', data?.results?.length, 'results');
-        return data;
-    } catch (error) {
-        console.error('[AiApi] fetchAiNearby Exception:', error);
-        throw error;
-    }
+    const data = await apiPost<AiSuggestResponse>('/ai/nearby', {
+        city,
+        user_address: userAddress,
+        query,
+        lat,
+        lng,
+        grounding: options?.grounding ?? false,
+        radius: options?.radius ?? 1000,
+    });
+    console.log('[AiApi] fetchAiNearby Success:', data?.results?.length, 'results');
+    return data;
 };

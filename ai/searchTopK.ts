@@ -1,4 +1,4 @@
-import { loadVectors } from "./loadVectors";
+import { useVectorStore } from "../hooks/useVectorStore";
 import { yieldToEventLoop } from "../utils/async";
 
 // Inlined dot product to avoid function call overhead and subarray allocation
@@ -16,7 +16,12 @@ function dotProduct(queryVec: Float32Array, vectors: Float32Array, index: number
 }
 
 export const searchTopK = async (queryVec: Float32Array, city: string, k = 5) => {
-  const vectors = await loadVectors(city);
+  let vectors = useVectorStore.getState().vectors;
+  if (!vectors || useVectorStore.getState().currentCity !== city) {
+    await useVectorStore.getState().loadCity(city);
+    vectors = useVectorStore.getState().vectors;
+  }
+  if (!vectors) throw new Error("Vectors not loaded");
   const dim = 384;
   const total = vectors.length / dim;
 

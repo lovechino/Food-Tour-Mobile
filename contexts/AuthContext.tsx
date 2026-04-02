@@ -1,106 +1,144 @@
 /**
  * contexts/AuthContext.tsx
  * Quản lý trạng thái đăng nhập toàn app.
- * Hỗ trợ: Google Sign-In, Dùng Không Đăng Nhập (Guest), Đăng Xuất.
+ * Hỗ trợ: Google Sign-In, Guest Mode (với permissions framework).
  */
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, {
+  createContext, useContext, useState,
+  useEffect, ReactNode, useCallback,
+} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-    AuthUser,
-    loginWithGoogle as apiLoginWithGoogle,
-    getStoredAuth,
-    logout as apiLogout,
-    isTokenExpired,
+  AuthUser,
+  loginWithGoogle as apiLoginWithGoogle,
+  getStoredAuth,
+  logout as apiLogout,
+  isTokenExpired,
 } from '../services/authService';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Guest Permissions ───────────────────────────────────────────
+export const GUEST_PERMISSIONS = {
+  canBrowse: true,
+  canSearch: true,
+  canChat: false,
+  canNearby: false,
+  canOffline: false,
+  canSaveFavorite: false,
+} as const;
+
+export type GuestPermissions = typeof GUEST_PERMISSIONS;
+
+// ── Types ───────────────────────────────────────────────────────
 
 interface AuthContextType {
-    user: AuthUser | null;
-    token: string | null;
-    isLoggedIn: boolean;
-    isGuest: boolean;           // true nếu user chọn "Dùng không đăng nhập"
-    isAuthLoading: boolean;     // true khi đang check trạng thái ban đầu
-    loginWithGoogle: (googleIdToken: string) => Promise<void>;
-    continueAsGuest: () => void;
-    logout: () => Promise<void>;
+  user: AuthUser | null;
+  token: string | null;
+  isLoggedIn: boolean;
+  isGuest: boolean;
+  isAuthLoading: boolean;
+  guestPermissions: GuestPermissions;
+  loginWithGoogle: (googleIdToken: string) => Promise<void>;
+  continueAsGuest: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// ── Provider ─────────────────────────────────────────────────────────────────
+const UPSELL_COUNT_KEY = '@guest_upsell_count';
+
+// ── Provider ────────────────────────────────────────────────────
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-    const [user, setUser] = useState<AuthUser | null>(null);
-    const [token, setToken] = useState<string | null>(null);
-    const [isGuest, setIsGuest] = useState(false);
-    const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-    // Load trạng thái auth lúc app khởi động
-    useEffect(() => {
-        const loadAuth = async () => {
-            try {
-                const stored = await getStoredAuth();
+  useEffect(() => { loadAuth(); }, []);
 
-                if (stored.token && stored.user) {
-                    // Kiểm tra token còn hạn không
-                    if (!isTokenExpired(stored.token)) {
-                        setUser(stored.user);
-                        setToken(stored.token);
-                    } else {
-                        // Token hết hạn → xoá và yêu cầu đăng nhập lại
-                        console.log('[Auth] Token expired, clearing...');
-                        await apiLogout();
-                    }
-                }
-            } catch (e) {
-                console.error('[Auth] Failed to load auth state:', e);
-            } finally {
-                setIsAuthLoading(false);
-            }
-        };
-        loadAuth();
-    }, []);
+  const loadAuth = async () => {
+    try {
+      const stored = await getStoredAuth();
+      if (stored.token && stored.user) {
+        if (!isTokenExpired(stored.token)) {
+          setUser(stored.user);
+          setToken(stored.token);
+        } else {
+          console.log('[Auth] Token expired, clearing...');
+          await apiLogout();
+        }
+      }
+    } catch (e) {
+      console.error('[Auth] Load failed:', e);
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
 
-    const loginWithGoogle = async (googleIdToken: string) => {
-        const result = await apiLoginWithGoogle(googleIdToken);
-        setUser(result.user);
-        setToken(result.token);
-        setIsGuest(false);
-    };
+  const loginWithGoogle = useCallback(async (googleIdToken: string) => {
+    const result = await apiLoginWithGoogle(googleIdToken);
+    setUser(result.user);
+    setToken(result.token);
+    setIsGuest(false);
+    await trackUpsellReset();
+  }, []);
 
-    const continueAsGuest = () => {
-        setIsGuest(true);
-        setUser(null);
-        setToken(null);
-    };
+  const continueAsGuest = useCallback(() => {
+    setIsGuest(true);
+    setUser(null);
+    setToken(null);
+  }, []);
 
-    const logout = async () => {
-        await apiLogout();
-        setUser(null);
-        setToken(null);
-        setIsGuest(false);
-    };
+  const logout = useCallback(async () => {
+    await apiLogout();
+    setUser(null);
+    setToken(null);
+    setIsGuest(false);
+  }, []);
 
-    return (
-        <AuthContext.Provider value={{
-            user,
-            token,
-            isLoggedIn: !!user && !!token,
-            isGuest,
-            isAuthLoading,
-            loginWithGoogle,
-            continueAsGuest,
-            logout,
-        }}>
-            {children}
-        </AuthContext.Provider>
-    );
+  return (
+    <AuthContext.Provider value={{
+      user,
+      token,
+      isLoggedIn: !!user && !!token,
+      isGuest,
+      isAuthLoading,
+      guestPermissions: GUEST_PERMISSIONS,
+      loginWithGoogle,
+      continueAsGuest,
+      logout,
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
-// ── Hook ─────────────────────────────────────────────────────────────────────
+// ── Hook ────────────────────────────────────────────────────────
 
 export const useAuth = () => {
-    const context = useContext(AuthContext);
-    if (!context) throw new Error('useAuth must be used within an AuthProvider');
-    return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be within AuthProvider');
+  return ctx;
 };
+
+// ── Upsell Tracking ─────────────────────────────────────────────
+
+async function trackUpsellReset() {
+  await AsyncStorage.removeItem(UPSELL_COUNT_KEY);
+}
+
+/**
+ * Đếm số lần Guest đã dùng app.
+ * Sau 3 lần → trả true để hiện gentle nudge.
+ */
+export async function shouldShowGuestNudge(): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(UPSELL_COUNT_KEY);
+    const count = raw ? parseInt(raw, 10) : 0;
+    const next = count + 1;
+    await AsyncStorage.setItem(UPSELL_COUNT_KEY, next.toString());
+    return next >= 3;
+  } catch {
+    return false;
+  }
+}

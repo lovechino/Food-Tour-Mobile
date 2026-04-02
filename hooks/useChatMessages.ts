@@ -6,7 +6,7 @@
 import { useState, useCallback } from 'react';
 import { loadModel } from '../ai/model';
 import { loadTokenizer } from '../ai/tokenizer';
-import { loadVectors } from '../ai/loadVectors';
+import { useVectorStore } from './useVectorStore';
 import { searchFoodsWithLogic } from '../ai/searchLogic';
 import { generateResponse } from '../ai/responseGenerator';
 import { saveMessage, updateSessionCity } from '../services/userDatabase';
@@ -29,7 +29,7 @@ export function useChatMessages(deps: Dependencies) {
 
     const ensureAIReady = async (): Promise<boolean> => {
         try {
-            await Promise.all([loadModel(), loadTokenizer(), loadVectors(currentCity)]);
+            await Promise.all([loadModel(), loadTokenizer(), useVectorStore.getState().loadCity(currentCity)]);
             return true;
         } catch { return false; }
     };
@@ -71,7 +71,7 @@ export function useChatMessages(deps: Dependencies) {
     const switchCity = useCallback(async (city: string) => {
         if (city === currentCity) return;
         setCurrentCity(city);
-        await loadVectors(city);
+        await useVectorStore.getState().loadCity(city);
 
         if (currentSessionId) {
             await updateSessionCity(currentSessionId, city);

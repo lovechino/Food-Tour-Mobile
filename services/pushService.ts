@@ -26,6 +26,7 @@ import messaging, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { API_BASE_URL } from '../constants/api';
+import { getAuthHeader } from './authService';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const BACKEND_URL = API_BASE_URL;
@@ -61,9 +62,13 @@ export async function registerFcmToken(options: RegisterTokenOptions = {}): Prom
         }
 
         // Gửi lên backend
+        const authHeader = await getAuthHeader();
         const res = await fetch(`${BACKEND_URL}/push/register`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeader,
+            },
             body: JSON.stringify({
                 fcm_token: token,
                 platform: Platform.OS, // 'android' | 'ios'
@@ -95,9 +100,13 @@ export async function unregisterFcmToken(): Promise<void> {
         const token = await AsyncStorage.getItem(FCM_TOKEN_KEY);
         if (!token) return;
 
+        const authHeader = await getAuthHeader();
         await fetch(`${BACKEND_URL}/push/register`, {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeader,
+            },
             body: JSON.stringify({ fcm_token: token }),
         });
 

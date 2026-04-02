@@ -76,21 +76,23 @@ export const getMinId = async (city: string): Promise<number> => {
   }
 };
 
-export const searchByName = async (city: string, query: string): Promise<FoodItem[]> => {
+export const searchByName = async (
+  city: string,
+  query: string,
+): Promise<FoodItem[]> => {
   try {
-    if (!query.trim()) return [];
+    if (!query.trim() || query.trim().length < 2) return [];
     const db = await openDB(city);
-    // Basic sanitization to prevent SQL injection (though parameters are safer)
-    const safeQuery = query.replace(/'/g, "''");
+    const param = `%${query.trim()}%`;
 
-    // Search in ten_quan (Shop Name) and ten_mon (Dish Type/Name)
     const sql = `
-            SELECT * FROM food 
-            WHERE ten_quan LIKE '%${safeQuery}%' 
-               OR ten_mon LIKE '%${safeQuery}%' 
-            LIMIT 20
-        `;
-    const [results] = await db.executeSql(sql);
+      SELECT id, ten_quan, ten_mon, dia_chi, quan,
+             gia_min, gia_max, description
+      FROM food
+      WHERE ten_quan LIKE ? OR ten_mon LIKE ?
+      LIMIT 20
+    `;
+    const [results] = await db.executeSql(sql, [param, param]);
 
     const items: FoodItem[] = [];
     for (let i = 0; i < results.rows.length; i++) {

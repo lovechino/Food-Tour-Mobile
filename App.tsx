@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { StatusBar, useColorScheme, Alert } from 'react-native';
+import { StatusBar, useColorScheme, Alert, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import RootNavigator from './navigation/RootNavigator';
 import { ChatProvider } from './contexts/ChatContext';
@@ -13,9 +13,12 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { GlobalToast } from './components/GlobalToast';
 import { initPushNotifications } from './services/pushService';
+import { syncPendingSuggestions } from './services/suggestionQueue';
+import { getStoredAuth } from './services/authService';
 import type { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 
 import Config from 'react-native-config';
+import { detectLowEndDevice } from './utils/deviceCapability';
 
 // ── Cấu hình Google Sign-In ──────────────────────────────────────────────────
 // Gọi configure() 1 lần duy nhất khi app mount.
@@ -34,35 +37,46 @@ function App() {
   const isDarkMode = useColorScheme() === 'dark';
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
+  const runSync = async () => {
+    try {
+      const { token } = await getStoredAuth();
+      if (token) {
+        await syncPendingSuggestions(token);
+      }
+    } catch (e) {
+      console.warn('[App] Sync pending suggestions failed:', e);
+    }
+  };
+
   useEffect(() => {
-    // Khởi tạo FCM Push Notifications khi app mount
+    detectLowEndDevice();
+
+    runSync();
+
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') runSync();
+    });
+
     initPushNotifications({
-      // userId: currentUserId, // TODO: truyền userId khi user đã đăng nhập
       topics: 'all',
 
-      // Xử lý notification khi app đang mở (foreground)
       onMessage: (msg: FirebaseMessagingTypes.RemoteMessage) => {
         const { title, body } = msg.notification ?? {};
         console.log('[App] Foreground notification:', title, body);
-        // Hiển thị in-app toast thay vì system notification
-        // (System notification tự động hiện khi background)
         if (title && body) {
           Alert.alert(title, body);
         }
       },
 
-      // Xử lý khi user tap vào notification để mở app
       onOpen: (msg: FirebaseMessagingTypes.RemoteMessage) => {
         console.log('[App] Notification opened:', msg.data);
-        // TODO: Navigate đến màn hình tương ứng dựa theo msg.data
-        // Ví dụ: msg.data?.screen === 'city' → navigate to OnlineHomeScreen
       },
     }).then(({ unsubscribe }) => {
       unsubscribeRef.current = unsubscribe;
     });
 
-    // Cleanup khi app unmount
     return () => {
+      subscription.remove();
       if (unsubscribeRef.current) {
         unsubscribeRef.current();
       }

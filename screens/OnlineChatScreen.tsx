@@ -18,6 +18,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { ThemeColors } from '../constants/colors';
 import { chatApi } from '../services/chatApi';
 import { FoodItem } from '../services/cityApi';
+import { useRequireAuth } from '../hooks/useRequireAuth';
 
 interface Message {
     id: string;
@@ -36,6 +37,7 @@ export default function OnlineChatScreen() {
 
     const { colors, theme } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
+    const { guard } = useRequireAuth();
 
     const QUICK_ACTIONS = [
         { id: '1', label: '🍜 Món sáng ngon', query: 'Tìm món ăn sáng ngon ở đây' },
@@ -47,6 +49,12 @@ export default function OnlineChatScreen() {
     const handleSend = (textOverride?: string) => {
         const query = textOverride || input;
         if (!query.trim()) return;
+
+        // Guest user → hiện modal đăng nhập, không gọi API
+        guard(() => sendChatMessage(query), 'chat');
+    };
+
+    const sendChatMessage = (query: string) => {
 
         const userMsg: Message = { id: Date.now().toString(), text: query, sender: 'user' };
         setMessages(prev => [...prev, userMsg]);

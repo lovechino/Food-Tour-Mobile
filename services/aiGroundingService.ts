@@ -1,11 +1,14 @@
 /**
  * services/aiGroundingService.ts
- * Why: Tách logic reverse geocoding + AI grounding khỏi AiNearbyScreen (SRP).
- * Screen chỉ nên render, logic nghiệp vụ nằm ở Service layer.
+ * Server-side Gemini grounding via backend proxy.
+ * Key NEVER leaves the server — user's encrypted Gemini key is decrypted
+ * on the backend, used for the API call, then discarded.
  */
 import { fetchAiNearby, AiSuggestResponse, FoodItem } from './cityApi';
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthHeader } from './authService';
+import { addToPendingQueue } from './suggestionQueue';
+import { getStoredAuth } from './authService';
+import { API_BASE_URL } from '../constants/api';
 
 /** Why: Reverse geocode tọa độ GPS thành địa chỉ tiếng Việt */
 async function reverseGeocode(lat: number, lng: number): Promise<{ address: string; city: string }> {
@@ -30,34 +33,76 @@ async function reverseGeocode(lat: number, lng: number): Promise<{ address: stri
     return { address, city };
 }
 
-/** Why: Xử lý hybrid grounding khi backend yêu cầu local AI */
-async function groundLocally(res: AiSuggestResponse, detectedCity: string): Promise<AiSuggestResponse | null> {
-    const userApiKey = await AsyncStorage.getItem('@gemini_api_key');
-    if (!userApiKey) {
-        if (res.db_results?.length) return { ...res, results: res.db_results };
-        return null;
-    }
-
+/**
+ * Server-side grounding via backend proxy.
+ * User's Gemini key is decrypted on server — key never reaches device.
+ */
+async function groundViaServer(userAddress: string, city: string, query: string): Promise<{
+    reply: string;
+    results: Record<string, unknown>[];
+    model_used: string;
+} | null> {
     try {
-        const genAI = new GoogleGenerativeAI(userApiKey);
-        const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
-            systemInstruction: res.system_instruction,
-            tools: [{ googleSearch: {} }]
-        } as Record<string, unknown>);
+        const authHeader = await getAuthHeader();
+        const res = await fetch(`${API_BASE_URL}/api/v1/ai/grounding`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeader,
+            },
+            body: JSON.stringify({
+                city,
+                user_address: userAddress,
+                query,
+            }),
+        });
 
-        const result = await model.generateContent(res.grounding_prompt!);
-        const text = result.response.text();
-        const jsonMatch = text.match(/\[[\s\S]*\]/);
-        if (!jsonMatch) return null;
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({})) as any;
+            if (err.needs_key) {
+                console.warn('[Grounding] User has no Gemini key configured.');
+            }
+            return null;
+        }
 
-        const parsed = JSON.parse(jsonMatch[0]);
-        const mapped = mapAiResults(parsed, detectedCity);
-        return { ...res, results: mapped, reply: "Tôi đã tìm kiếm thực tế và thấy một số quán mới quanh bạn:" };
-    } catch {
+        return await res.json();
+    } catch (e) {
+        console.error('[Grounding] Server-side grounding failed:', e);
+        return null;
+    }
+}
+
+/** Why: Xử lý hybrid grounding khi backend yêu cầu local AI */
+async function groundLocally(res: AiSuggestResponse, detectedCity: string, userAddress: string): Promise<AiSuggestResponse | null> {
+    // Use server-side grounding instead of direct Gemini call
+    const serverResult = await groundViaServer(userAddress, detectedCity, 'quán ăn');
+
+    if (!serverResult || !serverResult.results?.length) {
         if (res.db_results?.length) return { ...res, results: res.db_results };
         return null;
     }
+
+    const mapped = mapAiResults(serverResult.results, detectedCity);
+
+    const { user } = await getStoredAuth();
+    if (user?.userId) {
+        for (const item of mapped) {
+            const existingIds = (res.db_results || []).map((r: FoodItem) => r.id);
+            if (!existingIds.includes(item.id)) {
+                await addToPendingQueue(user.userId, {
+                    ten_quan: item.ten_quan,
+                    ten_mon: item.ten_mon,
+                    dia_chi: item.dia_chi,
+                    thanh_pho: item.thanh_pho,
+                    latitude: item.lat,
+                    longitude: item.lng,
+                    raw_data: { source: 'gemini_grounding_server', city: detectedCity },
+                });
+            }
+        }
+    }
+
+    return { ...res, results: mapped, reply: serverResult.reply || "Tôi đã tìm kiếm thực tế và thấy một số quán mới quanh bạn:" };
 }
 
 /** Why: Map raw AI response thành FoodItem[] chuẩn */
@@ -85,7 +130,7 @@ export async function fetchNearbyAI(lat: number, lng: number): Promise<{
         const res = await fetchAiNearby(city, address, lat, lng, 'quán ăn', { radius: 1000 });
 
         if (res.should_ground_locally && res.grounding_prompt && res.system_instruction) {
-            const grounded = await groundLocally(res, city);
+            const grounded = await groundLocally(res, city, address);
             if (grounded) return { data: grounded, error: null };
         }
 

@@ -1,71 +1,118 @@
+/**
+ * components/OfflineGuard.tsx
+ * Guard khi user Online chưa tải pack Offline.
+ * Sửa microcopy + thêm deep-link Cài đặt Bộ nhớ.
+ */
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from 'react-native';
 import { useAppMode } from '../contexts/AppModeContext';
 import { useNavigation } from '@react-navigation/native';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface OfflineGuardProps {
-    children: React.ReactNode;
+  children: React.ReactNode;
 }
 
 export const OfflineGuard: React.FC<OfflineGuardProps> = ({ children }) => {
-    const { mode, isDataReady } = useAppMode();
-    const navigation = useNavigation<any>();
+  const { mode, isDataReady } = useAppMode();
+  const navigation = useNavigation<any>();
+  const { colors } = useTheme();
 
-    if (mode === 'online' && !isDataReady) {
-        return (
-            <View style={styles.container}>
-                <View style={[styles.content, StyleSheet.absoluteFill, { zIndex: 10, backgroundColor: 'rgba(255,255,255,0.9)' }]}>
-                    <View style={styles.card}>
-                        <Text style={styles.icon}>📶</Text>
-                        <Text style={styles.title}>Tính năng Offline</Text>
-                        <Text style={styles.desc}>
-                            Bạn đang ở chế độ Online. Để sử dụng tính năng này không cần mạng, bạn cần tải xuống model AI và dữ liệu thành phố.
-                        </Text>
-                        <TouchableOpacity
-                            style={styles.button}
-                            onPress={() => navigation.navigate('Welcome')}
-                        >
-                            <Text style={styles.buttonText}>Tải ngay</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-                {/* Still show the UI behind (blurred/disabled) as per user request "vẫn có thể chuyển qua xem" */}
-                <View style={{ flex: 1, opacity: 0.3 }} pointerEvents="none">
-                    {children}
-                </View>
-            </View>
-        );
-    }
+  if (mode === 'online' && !isDataReady) {
+    return (
+      <View style={styles.container}>
+        <OverlayContent
+          navigation={navigation}
+          colors={colors}
+        />
+        <View style={styles.backdrop} pointerEvents="none">
+          {children}
+        </View>
+      </View>
+    );
+  }
 
-    return <>{children}</>;
+  return <>{children}</>;
 };
 
+// ── Overlay ─────────────────────────────────────────────────────
+
+function OverlayContent({ navigation, colors }: any) {
+  return (
+    <View style={[styles.overlay, { backgroundColor: colors.overlay || 'rgba(255,255,255,0.9)' }]}>
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={styles.icon}>📦</Text>
+        <Text style={[styles.title, { color: colors.text }]}>
+          Cần tải gói Offline
+        </Text>
+        <Text style={[styles.desc, { color: colors.textSecondary }]}>
+          Dùng được không cần mạng — cần tải ~100MB lần đầu.
+          Vào Cài đặt để tải gói dữ liệu nhé!
+        </Text>
+
+        <TouchableOpacity
+          style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
+          onPress={() => navigation.navigate('Settings')}
+        >
+          <Text style={styles.btnText}>Tải trong Cài đặt</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={openStorageSettings}>
+          <Text style={[styles.linkText, { color: colors.primary }]}>
+            Kiểm tra dung lượng điện thoại →
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+// ── Deep link OS Storage ────────────────────────────────────────
+
+function openStorageSettings() {
+  if (Platform.OS === 'android') {
+    Linking.openSettings();
+  } else {
+    Linking.openURL('App-Prefs:STORAGE_AND_BACKUP');
+  }
+}
+
+// ── Styles ──────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-    container: { flex: 1 },
-    content: {
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 20,
-    },
-    card: {
-        backgroundColor: '#fff',
-        padding: 30,
-        borderRadius: 20,
-        alignItems: 'center',
-        elevation: 5,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-    },
-    icon: { fontSize: 40, marginBottom: 15 },
-    title: { fontSize: 20, fontWeight: 'bold', color: '#333', marginBottom: 10 },
-    desc: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 20, marginBottom: 25 },
-    button: {
-        backgroundColor: '#007AFF',
-        paddingHorizontal: 30,
-        paddingVertical: 12,
-        borderRadius: 25,
-    },
-    buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
+  container: { flex: 1 },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  backdrop: { flex: 1, opacity: 0.3 },
+  card: {
+    padding: 30, borderRadius: 24,
+    alignItems: 'center', width: '100%', maxWidth: 340,
+    borderWidth: 1, elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15, shadowRadius: 10,
+  },
+  icon: { fontSize: 48, marginBottom: 12 },
+  title: {
+    fontSize: 20, fontWeight: 'bold', marginBottom: 10,
+    textAlign: 'center',
+  },
+  desc: {
+    fontSize: 14, textAlign: 'center',
+    lineHeight: 22, marginBottom: 24,
+  },
+  primaryBtn: {
+    paddingHorizontal: 28, paddingVertical: 12,
+    borderRadius: 24, marginBottom: 12,
+  },
+  btnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  linkText: {
+    fontSize: 13, fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
 });

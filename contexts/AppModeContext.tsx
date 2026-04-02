@@ -1,73 +1,114 @@
-// contexts/AppModeContext.tsx
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+/**
+ * contexts/AppPhaseContext.tsx
+ * Thay thế AppModeContext — dùng Reducer pattern.
+ * Mỗi phase chỉ chuyển sang phase hợp lệ → 0 invalid state.
+ */
+import React, {
+  createContext, useContext, useReducer,
+  useEffect, ReactNode, Dispatch,
+} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { isModelDownloaded } from '../services/model';
-import { isCityPackDownloaded, getDownloadedPacks } from '../services/pack';
+import { getDownloadedPacks } from '../services/pack';
+import {
+  AppPhase, AppAction, appPhaseReducer, INITIAL_PHASE,
+} from './appPhaseReducer';
 
-export type AppMode = 'online' | 'offline' | 'pending';
-
-interface AppModeContextType {
-    mode: AppMode;
-    setAppMode: (mode: AppMode) => Promise<void>;
-    isDataReady: boolean;
-    refreshDataStatus: () => Promise<void>;
-    isLoading: boolean; // Add this
+// ── Context Types ───────────────────────────────────────────────
+interface AppPhaseContextType {
+  state: AppPhase;
+  dispatch: Dispatch<AppAction>;
 }
 
-const AppModeContext = createContext<AppModeContextType | undefined>(undefined);
+const AppPhaseContext = createContext<AppPhaseContextType | undefined>(
+  undefined,
+);
 
-const MODE_STORAGE_KEY = '@app_mode';
+const MODE_KEY = '@app_mode';
+const CITY_KEY = '@preferred_city';
 
-export const AppModeProvider = ({ children }: { children: ReactNode }) => {
-    const [mode, setMode] = useState<AppMode>('pending');
-    const [isDataReady, setIsDataReady] = useState(false);
-    const [isLoading, setIsLoading] = useState(true); // Default true
+// ── Provider ────────────────────────────────────────────────────
+export const AppPhaseProvider = ({ children }: { children: ReactNode }) => {
+  const [state, dispatch] = useReducer(appPhaseReducer, INITIAL_PHASE);
 
-    const refreshDataStatus = async () => {
-        const modelReady = await isModelDownloaded();
-        // Check if ANY city pack is downloaded
-        const packs = await getDownloadedPacks();
-        const cityReady = packs.length > 0;
-        setIsDataReady(modelReady && cityReady);
-    };
+  useEffect(() => { initializePhase(dispatch); }, []);
 
-    useEffect(() => {
-        const loadMode = async () => {
-            try {
-                const savedMode = await AsyncStorage.getItem(MODE_STORAGE_KEY);
-                if (savedMode) {
-                    setMode(savedMode as AppMode);
-                }
-                await refreshDataStatus();
-            } finally {
-                setIsLoading(false); // Done loading
-            }
-        };
-        loadMode();
-    }, []);
-
-    const setAppMode = async (newMode: AppMode) => {
-        console.log(`Setting app mode to: ${newMode}`);
-        try {
-            setMode(newMode);
-            await AsyncStorage.setItem(MODE_STORAGE_KEY, newMode);
-            console.log("AsyncStorage updated. Refreshing data status...");
-            await refreshDataStatus();
-            console.log("Data status refreshed.");
-        } catch (e) {
-            console.error("Error inside setAppMode:", e);
-        }
-    };
-
-    return (
-        <AppModeContext.Provider value={{ mode, setAppMode, isDataReady, refreshDataStatus, isLoading }}>
-            {children}
-        </AppModeContext.Provider>
-    );
+  return (
+    <AppPhaseContext.Provider value={{ state, dispatch }}>
+      {children}
+    </AppPhaseContext.Provider>
+  );
 };
 
-export const useAppMode = () => {
-    const context = useContext(AppModeContext);
-    if (!context) throw new Error('useAppMode must be used within an AppModeProvider');
-    return context;
-};
+// ── Init Logic ──────────────────────────────────────────────────
+async function initializePhase(dispatch: Dispatch<AppAction>) {
+  try {
+    const [savedMode, savedCity] = await Promise.all([
+      AsyncStorage.getItem(MODE_KEY),
+      AsyncStorage.getItem(CITY_KEY),
+    ]);
+    const hasToken = savedMode === 'online' || savedMode === 'offline';
+
+    dispatch({ type: 'INIT_COMPLETE', hasToken });
+
+    if (savedMode === 'offline') {
+      await handleSavedOffline(dispatch, savedCity);
+    }
+  } catch (e) {
+    console.error('[AppPhase] Init error:', e);
+    dispatch({ type: 'INIT_COMPLETE', hasToken: false });
+  }
+}
+
+async function handleSavedOffline(
+  dispatch: Dispatch<AppAction>,
+  savedCity: string | null,
+) {
+  const city = savedCity || 'ha_noi';
+  const packs = await getDownloadedPacks();
+  const modelOk = await isModelDownloaded();
+
+  if (packs.length > 0 && modelOk) {
+    dispatch({ type: 'DOWNLOAD_START', city });
+    dispatch({ type: 'DOWNLOAD_COMPLETE' });
+  }
+}
+
+// ── Hook mới ────────────────────────────────────────────────────
+export function useAppPhase() {
+  const ctx = useContext(AppPhaseContext);
+  if (!ctx) throw new Error('useAppPhase must be within AppPhaseProvider');
+  return ctx;
+}
+
+// ── Backward-compatible bridge ──────────────────────────────────
+/**
+ * @deprecated Dùng useAppPhase() thay thế.
+ * Giữ lại để existing components không break ngay.
+ */
+export function useAppMode() {
+  const { state, dispatch } = useAppPhase();
+
+  const mode = mapPhaseToMode(state.phase);
+  const isDataReady = state.phase === 'offline_ready';
+  const isLoading = state.phase === 'initializing';
+
+  const setAppMode = async (newMode: string) => {
+    await AsyncStorage.setItem(MODE_KEY, newMode);
+    if (newMode === 'online') {
+      dispatch({ type: 'LOGIN_SUCCESS' });
+    }
+  };
+
+  const refreshDataStatus = async () => { /* no-op in new system */ };
+
+  return { mode, setAppMode, isDataReady, refreshDataStatus, isLoading };
+}
+
+function mapPhaseToMode(phase: string): string {
+  if (phase === 'online_ready') return 'online';
+  if (phase === 'offline_ready') return 'offline';
+  if (phase === 'offline_downloading') return 'offline';
+  if (phase === 'initializing') return 'pending';
+  return 'pending';
+}
